@@ -1,19 +1,25 @@
-{-# LANGUAGE JavaScriptFFI #-}
-
-import GHCJS.Types
-import GHCJS.Foreign.Callback
+{-# LANGUAGE LambdaCase #-}
 import Data.Colour
 import Data.Colour.Names
-import JavaScript.Cocos2d.Layer
+import Control.Monad
+import JavaScript.Cocos2d
+import JavaScript.Cocos2d.Sys
+import JavaScript.Cocos2d.EGLView
+import JavaScript.Cocos2d.Director
 import JavaScript.Cocos2d.Types
+import JavaScript.Cocos2d.Node
+import JavaScript.Cocos2d.Layer
+import JavaScript.Cocos2d.Scene
 
-foreign import javascript unsafe "cc.Scene.extend({onEnter:function() {this._super(); this.addChild($1);}})" sceneClass :: LayerColor -> IO JSVal
-foreign import javascript unsafe "new $1()" newInstance :: JSVal -> IO JSVal
-foreign import javascript unsafe "cc.game.onStart = function() {cc.LoaderScene.preload([], $1)}; cc.game.run();" runApp :: Callback a -> IO ()
-foreign import javascript unsafe "cc.director.runScene($1);" runScene :: JSVal -> IO ()
-
-main = do
-    cb <- syncCallback ContinueAsync $ do
-        putStrLn "*** Program started ***"
-        createLayerColor (opaque red) 1000 1000 >>= sceneClass >>= newInstance >>= runScene
-    runApp cb
+main = void . runWithGame . flip setOnStart $ do
+    view <- getView
+    getSys >>= getOS >>= \case
+        IOS -> setEnableRetina view True
+        _ -> return ()
+    setAdjustViewPort view True
+    setDesignResolutionSize view 960 640 ShowAll
+    setResizeWithBrowserSize view True
+    join $ runScene <$> getDirector <*> do
+        scene <- createScene
+        setOnEnter scene $ addChild scene =<< createLayerColor (opaque blueviolet)
+        return scene
