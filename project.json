@@ -11,5 +11,9 @@
 
     "modules" : ["cocos2d", "cocostudio"],
 
-    "jsList" : [ ]
+    "jsList" : [
+        "js/rts.js",
+        "js/lib.js",
+        "js/out.js"
+    ]
 }

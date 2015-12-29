@@ -55,11 +55,14 @@ executable cocos2d-proj
   
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:    
+  -- cpp-options:         -DGHCJS_BROWSER
+  ghc-options:         -Wall -O2
   
   -- Other library packages from which modules are imported.
   build-depends:       base >=4.8 && <4.9,
                        ghcjs-base,
                        ghcjs-cocos2d,
+                       lens,
                        colour
   
   -- Directories containing source files.

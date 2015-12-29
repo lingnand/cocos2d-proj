@@ -16,4 +16,6 @@ Each `build` will trigger an automatic deploy that copies the compiled js source
 
 ## Preview
 
-Choose any static web server to serve the project directory on a given address (I'm using `http-server`). Then go to that address in your browser to play the game. Note [cocos2d-js](https://github.com/cocos2d/cocos2d-js) explains that the same source can be compiled to a slew of other platforms such as iOS and Android, but I haven't tried it out yet.
+Choose any static web server to serve the project directory on a given address (I'm using `http-server`). Then go to that address in your browser to play the game.
+
+The same source has also been tested to work with [cocos2d-js](https://github.com/cocos2d/cocos2d-js)'s jsb on iOS and OSX.
