@@ -60,10 +60,16 @@ executable cocos2d-proj
   
   -- Other library packages from which modules are imported.
   build-depends:       base >=4.8 && <4.9,
+                       containers,
+                       transformers,
                        ghcjs-base,
                        ghcjs-cocos2d,
+                       reflex,
+                       reflex-cocos2d,
                        lens,
-                       colour
+                       colour,
+                       linear,
+                       data-default
   
   -- Directories containing source files.
   hs-source-dirs:      src
