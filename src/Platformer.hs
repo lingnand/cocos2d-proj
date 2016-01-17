@@ -1,17 +1,13 @@
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE MultiWayIf #-}
 module Platformer where
 
 import Linear
 import qualified Data.Set as S
-import Data.Fix
 import Data.Default
 import Data.Time.Clock
 import Data.Colour.Names
-import Control.Compose
 import Control.Lens
-import JavaScript.Cocos2d.Types
 import Reflex
 import Reflex.Cocos2d
 
@@ -47,8 +43,8 @@ update (keys, dt) p = p & vel .~ v
           dir = arrow keys * speed
           dt' = realToFrac dt
 
-platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> Fix (m :. Event t)
-platformer winSize dks ts = Fix . O $ do
+platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> FixEvent t m
+platformer winSize dks ts = FixEvent $ do
       dplayer <- foldDyn update (Player zero (winSize/2)) $ attachDyn dks ts
       dpos <- mapDyn (^.pos) dplayer
       -- hfor (updated dpos) $ liftIO . print

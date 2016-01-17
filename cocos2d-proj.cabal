@@ -70,9 +70,7 @@ executable cocos2d-proj
                        colour,
                        linear,
                        time,
-                       data-default,
-                       data-fix,
-                       TypeCompose
+                       data-default
   
   -- Directories containing source files.
   hs-source-dirs:      src
