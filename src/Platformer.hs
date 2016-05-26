@@ -3,6 +3,8 @@
 module Platformer where
 
 import qualified Data.Set as S
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Free
 import Reflex
 import Reflex.Cocos2d.Prelude
 
@@ -42,12 +44,11 @@ update (keys, dt) p = p & velocity .~ v
           dir = arrow keys * speed
           dt' = realToFrac dt
 
-platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> FixEvent t m
-platformer winSize dks ts = FixEvent $ do
+platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> FreeT (Event t) m ()
+platformer winSize dks ts = lift $ do
       dplayer <- foldDyn update (Player 0 (0 .+^ winSize/2)) $ attachDyn dks ts
       dpos <- mapDyn (^.position) dplayer
       -- hfor (updated dpos) $ liftIO . print
       layerColor_ $ def & pos .~ dpos
                         & size .~ constDyn (pure 150)
                         & color .~ constDyn orange
-      return never

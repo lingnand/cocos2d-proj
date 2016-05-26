@@ -1,37 +1,201 @@
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE LambdaCase #-}
+import GHC.Generics
 import Numeric
+import qualified Data.Array as A
+import qualified Data.Map as M
+import Data.Fixed
+import Data.Function
+import Data.Enumerate
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Maybe
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Free
 import Reflex
-import Reflex.Cocos2d.Prelude
+import Reflex.Cocos2d.Prelude hiding (Box)
 import qualified Platformer as P
 
-runningMan :: NodeGraph t m => V2 Double -> Event t NominalDiffTime -> FixEvent t m
-runningMan winSize ts = FixEvent $ do
-    let l = (0 .+^ winSize/2)
-        fns = [ "res/walk/000"++show n++".png" | n <- [1..8]::[Int] ]
-    (progress, finished) <- load fns
-    let loading = do
-          percent::Dynamic t Double <- foldDyn (const . uncurry (/)) 0 progress
-          notice <- forDyn percent $ \p -> "Loading " ++ showFFloat (Just 2) (p*100) "%..."
-          label_ $ def & pos .~ constDyn l
-                       & fontSize .~ constDyn 25
-                       & text .~ notice
-    node def -| loading $ ffor finished . const $ do
-        ts' <- slowdown 6 ts
-        fnE <- zipListWithEvent const (cycle fns) ts'
-        fnDyn <- holdDyn (head fns) fnE
-        label_ $ def & pos .~ constDyn (l & _y //~ 4)
-                     & text .~ fnDyn
-        sprite_ $ def & pos .~ constDyn l
-                      & color .~ constDyn white
-                      & spriteName .~ fnDyn
-    return never
+-- | Load the given resources with a loading message, return an Event that
+-- fires with the loading finishes
+loadingScene :: NodeGraph t m => P2 Double -> [String] -> FreeT (Event t) m ()
+loadingScene labelPosition resources = do
+    (progress, finished) <- lift $ load resources
+    lift $ do
+      -- loading scene
+      percent <- foldDyn (const . uncurry ((/) `on` fromIntegral)) (0::Double) progress
+      notice <- forDyn percent $ \p -> "Loading " ++ showFFloat (Just 2) (p*100) "%..."
+      label_ $ def & pos .~ constDyn labelPosition
+                   & fontSize .~ constDyn 25
+                   & text .~ notice
+    liftF finished
+
+data LiveState = Alive | Dead deriving (Enum, Generic, Enumerable, Eq, Ord, Show, Read)
+
+data CollisionType = Ground | Box LiveState | Enemy LiveState deriving (Generic, Enumerable, Eq, Ord, Show, Read)
+
+instance Enum CollisionType where
+    toEnum = toEnum_enumerable array_CollisionType
+    fromEnum = fromEnum_enumerable table_CollisionType
+
+array_CollisionType :: A.Array Int CollisionType
+array_CollisionType = array_enumerable
+
+table_CollisionType :: M.Map CollisionType Int
+table_CollisionType = table_enumerable
+
+data Box t = B { boxToRecycle :: Event t ()
+               , boxBody :: DynBody t CollisionType
+               , boxSprite :: DynSprite t
+               }
+
+box :: NodeGraph t m
+    => Event t (DragEvent t) -- ^ drags
+    -> DynSpace t
+    -> Double -- ^ box side len as in physical simulation
+    -> P2 Double
+    -> String -- ^ box image
+    -> Dynamic t String -- ^ animation when box broken
+    -> m (Box t)
+box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
+    -- create a box state that represents the box (data)
+    let dbeganE = (^.dragBegan) <$> drags
+        brokenE = fforMaybe (b^.collisionBegan) $ \a ->
+                      case (a^.thisCollisionType, a^.otherCollisionType) of
+                        (_, Box _) -> Nothing
+                        (Box Alive, _) -> Just ()
+                        _ -> Nothing
+    dmovedE <- switchPromptly never $ (^.dragMoved) <$> drags
+    droppingE <- switchPromptly never $ (^.dragEnded) <$> drags
+    outOfStageE <- delay' 2 brokenE
+    let ctE  = leftmost [ Box Dead <$ brokenE, Box Alive <$ droppingE ]
+        setBodyPosE =  leftmost [ (^.loc) <$> dbeganE
+                                , (^.loc) <$> dmovedE
+                                , outOfStageP <$ outOfStageE ]
+    b <- dynamicBody sp $ def & bodyPos .~ outOfStageP
+                              & setBodyPos .~ setBodyPosE
+                              & setBodyRot .~ (xDir <$ setBodyPosE)
+                              & setBodyVel .~ (0 <$ setBodyPosE)
+                              & setBodyAngularVel .~ (0 <$ droppingE)
+                              & active .~ False -- sleep the bodies on start
+                              & setActive .~ leftmost [ True <$ droppingE
+                                                      , False <$ outOfStageE ]
+                              & collisionType .~ Box Dead
+                              & setCollisionType .~ ctE
+                              & fixtures .~ [ def & shape .~ Poly (square sideLen)
+                                                  & mass .~ 5
+                                                  & friction .~ 0.2
+                                                  & elasticity .~ 1
+                                            ]
+    forG_ setBodyPosE $ liftIO . putStrLn . ("Setting position "++) . show
+    boxFrameD <- joinDyn <$> holdDyn (constDyn boxImage) (brokenAnim <$ brokenE)
+    s <- sprite $ def & trans .~ (b ^. trans)
+                      & spriteName .~ boxFrameD
+    return $ B outOfStageE b s
+
+
+spawnEnemies :: (NodeGraph t m, PrimMonad m)
+             => V2 Double
+             -> DynSpace t
+             -> Event t NominalDiffTime
+             -> V2 Double -- ^ enemy rectangular size
+             -> Dynamic t String -- ^ enemy animation (alive)
+             -> RandT m ()
+spawnEnemies winSize@(V2 width height) sp ticks enemySize aliveAnim = do
+    -- get the running total of the time
+    randTsD <- lift $ foldDyn (+) 0 =<< dilate 2 ticks
+    -- as time goes on, we increase the probability of starting new enemies
+    spawnE <- (fmapMaybe id <$>) . picks $ ffor (updated randTsD) $ \t ->
+                  let spawnProb = cos (realToFrac t)
+                  in weighted [ (Just (), spawnProb)
+                              , (Nothing, 1-spawnProb)
+                              ]
+    let nEnemiesCache = 10
+        startPos, outOfStageP :: P2 Double
+        startPos = 0 .+^ winSize/2
+        outOfStageP = 0 .+^ winSize*2
+        enemySpeed = width/5
+        enemyY = enemySize^._y/2
+    lift $ mdo
+      -- set up the stack of enemies cache
+      (_, spawnEs, _) <- distribute spawnE nEnemiesCache recycleEs
+      recycleEs <- forM spawnEs $ \spawnE' -> mdo
+        let aliveE = Alive <$ spawnE'
+            dieE = fforMaybe (b^.collisionBegan) $ \a -> case a^.otherCollisionType of
+                        Box Alive -> Just Dead
+                        _ -> Nothing
+        aliveD <- holdDyn Dead $ leftmost [ aliveE, dieE ]
+        posFlipDyn <- fmap joinDyn $ forMDyn aliveD $ \case
+          Alive -> (foldDyn (+) 0 ticks >>=) . mapDyn $ \t ->
+              let dist = (realToFrac t) * enemySpeed + startPos^._x
+                  rem = dist `mod'` (2*width)
+              in if rem > width then ((2*width-rem) ^& enemyY, True ^& False {- flipped -})
+                                else (rem ^& enemyY, pure False)
+          Dead -> return $ constDyn (outOfStageP, pure False)
+        posDyn <- mapDyn fst posFlipDyn
+        b <- staticBody sp $ def & bodyPos .~ outOfStageP
+                                 & setBodyPos .~ (updated posDyn)
+                                 & collisionType .~ Enemy Dead
+                                 & setCollisionType .~ (Enemy <$> updated aliveD)
+                                 & fixtures .~ [ def & shape .~ Poly (uncurry rect $ unr2 enemySize)
+                                                     & mass .~ 30
+                                                     & elasticity .~ 0.2
+                                               ]
+        animD <- fmap joinDyn . forDyn aliveD $ \case
+          Alive -> aliveAnim
+          Dead -> constDyn ""
+        flippedD <- mapDyn snd posFlipDyn
+        sprite_ $ def & trans .~ (b^.trans)
+                      & flipped .~ flippedD
+                      & spriteName .~ animD
+        return dieE
+      return ()
+
+boxThrower :: (NodeGraph t m, PrimMonad m)
+           => Gen (PrimState m)
+           -> V2 Double
+           -> Event t (DragEvent t)
+           -> Event t NominalDiffTime -> FreeT (Event t) m ()
+boxThrower gen winSize@(V2 sw sh) drags ts = do
+    let midP = (0 .+^ winSize/2)
+        boxImage = "res/box.png"
+        enemyFns = [ "res/walk/000"++show i++".png" | i <- [1..8]::[Int] ]
+    -- Scene 1
+    loadingScene midP $ boxImage:enemyFns
+    -- Scene 2
+    lift $ do
+      let nBoxes = 5
+          sideLen = 150
+          outOfStageP = 0 .+^ winSize*2
+      sp <- space ts $ def & iterations .~ 5
+                           & gravity .~ constDyn (0 ^& (-100))
+      -- create the walls
+      staticBody sp $ def & bodyPos .~ midP
+                          & collisionType .~ Ground
+                          & fixtures .~ [ def & shape .~ Segment 0 a b
+                                              & elasticity .~ 0.6
+                                        | let rectPts = rect sw sh
+                                        , (a, b) <- zip rectPts (tail $ cycle rectPts)
+                                        ]
+      -- create simple squares
+      rec (stD, dsEs, _) <- distribute drags nBoxes (boxToRecycle <$> boxes)
+          boxes <- forM dsEs $ \dsE -> box dsE sp sideLen outOfStageP boxImage (constDyn boxImage)
+      -- spawn the enemies
+      enemyAnimD <- holdDyn (head enemyFns)
+                    =<< zipListWithEvent const (cycle enemyFns)
+                    =<< dilate (1/10) ts
+      runRandT ?? gen $ spawnEnemies winSize sp ts (150 ^& 260) enemyAnimD
+      nBoxesLeftTxtD <- (nubDyn <$> mapDyn length stD) >>= mapDyn (\n -> show n ++ " BOXES left")
+      label_ $ def & pos .~ constDyn (0 .+^ winSize & _x *~ 0.9 & _y *~ 0.05)
+                   & fontSize .~ constDyn 20
+                   & text .~ nBoxesLeftTxtD
+
 
 main = do
     os <- getOS
@@ -43,25 +207,20 @@ main = do
     setDesignResolutionSize 960 640 ShowAll
     setResizeWithBrowserSize True
     winSize <- getWinSize
+    gen <- createSystemRandom
     mainScene $ do
       evts <- uiEvents
       dks <- dynKeysDown (evts^.keyPressed) (evts^.keyReleased)
       ts <- ticks
-      rec let newChild = unfixEvent <$> switchPromptlyDyn dyns
-          (_, dyns)  <- newChild & layerColor (def & color .~ constDyn blueviolet) -| do
-            [lTouched, rTouched] <- forM [(200, yellow), (400, red)] $ \(x, c) -> do
-                l <- layerColor $ def & pos .~ constDyn (x ^& (winSize^._y/2))
-                                      & size .~ constDyn (pure 100)
-                                      & color .~ constDyn c
-                currPos <- sample . current $ l^.pos
-                liftIO $ print currPos
-                forHMaybe (attachDyn (l^.size) (evts^.touchesBegan)) $ \(sz, touches) ->
-                  let box = fromCorners 0 (0.+^sz) in
-                  runMaybeT . msum . ffor touches $ \t -> do
-                    loc' <- convertToNodeSpace l $ t^.loc
-                    guard $ box `contains` loc'
-                    return ()
-            return $ leftmost [ const (P.platformer winSize dks ts) <$> lTouched
-                              , const (runningMan winSize ts) <$> rTouched
-                              ]
-      return ()
+      -- fps10 <- dilate (1/10) ts
+      drags <- dragged (evts^.singleTouchEvents)
+      void $ layerColor (def & color .~ constDyn blueviolet) -<< do
+        [lTouched, rTouched] <- forM [ (300, yellow)
+                                     , (500, brown) ] $ \(x, c) -> lift $ do
+            l <- layerColor $ def & pos .~ constDyn (x ^& (winSize^._y/2))
+                                  & size .~ constDyn (pure 100)
+                                  & color .~ constDyn c
+            filterG ?? (evts^.touchBegan) $ nodeContains l . (^.loc)
+        wrap $ leftmost [ P.platformer winSize dks ts <$ lTouched
+                        , boxThrower gen winSize drags ts <$ rTouched
+                        ]

@@ -63,7 +63,10 @@ executable cocos2d-proj
                        containers,
                        transformers,
                        reflex,
-                       reflex-cocos2d
+                       reflex-cocos2d,
+                       free,
+                       array,
+                       enumerate
   
   -- Directories containing source files.
   hs-source-dirs:      src
