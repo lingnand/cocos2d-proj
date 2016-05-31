@@ -49,6 +49,7 @@ platformer winSize dks ts = lift $ do
       dplayer <- foldDyn update (Player 0 (0 .+^ winSize/2)) $ attachDyn dks ts
       dpos <- mapDyn (^.position) dplayer
       -- hfor (updated dpos) $ liftIO . print
-      layerColor_ $ def & pos .~ dpos
-                        & size .~ constDyn (pure 150)
-                        & color .~ constDyn orange
+      layerColor_ [ size := pure 150
+                  , color := orange
+                  , dyn pos := dpos
+                  ]

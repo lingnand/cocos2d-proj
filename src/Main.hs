@@ -31,9 +31,10 @@ loadingScene labelPosition resources = do
       -- loading scene
       percent <- foldDyn (const . uncurry ((/) `on` fromIntegral)) (0::Double) progress
       notice <- forDyn percent $ \p -> "Loading " ++ showFFloat (Just 2) (p*100) "%..."
-      label_ $ def & pos .~ constDyn labelPosition
-                   & fontSize .~ constDyn 25
-                   & text .~ notice
+      label_ [ pos := labelPosition
+             , fontSize := 25
+             , dyn' text := notice
+             ]
     liftF finished
 
 data LiveState = Alive | Dead deriving (Enum, Generic, Enumerable, Eq, Ord, Show, Read)
@@ -50,11 +51,6 @@ array_CollisionType = array_enumerable
 table_CollisionType :: M.Map CollisionType Int
 table_CollisionType = table_enumerable
 
-data Box t = B { boxToRecycle :: Event t ()
-               , boxBody :: DynBody t CollisionType
-               , boxSprite :: DynSprite t
-               }
-
 box :: NodeGraph t m
     => Event t (DragEvent t) -- ^ drags
     -> DynSpace t
@@ -62,7 +58,7 @@ box :: NodeGraph t m
     -> P2 Double
     -> String -- ^ box image
     -> Dynamic t String -- ^ animation when box broken
-    -> m (Box t)
+    -> m (Event t ()) -- ^ recycle Event
 box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
     -- create a box state that represents the box (data)
     let dbeganE = (^.dragBegan) <$> drags
@@ -78,26 +74,29 @@ box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
         setBodyPosE =  leftmost [ (^.loc) <$> dbeganE
                                 , (^.loc) <$> dmovedE
                                 , outOfStageP <$ outOfStageE ]
-    b <- dynamicBody sp $ def & bodyPos .~ outOfStageP
-                              & setBodyPos .~ setBodyPosE
-                              & setBodyRot .~ (xDir <$ setBodyPosE)
-                              & setBodyVel .~ (0 <$ setBodyPosE)
-                              & setBodyAngularVel .~ (0 <$ droppingE)
-                              & active .~ False -- sleep the bodies on start
-                              & setActive .~ leftmost [ True <$ droppingE
-                                                      , False <$ outOfStageE ]
-                              & collisionType .~ Box Dead
-                              & setCollisionType .~ ctE
-                              & fixtures .~ [ def & shape .~ Poly (square sideLen)
-                                                  & mass .~ 5
-                                                  & friction .~ 0.2
-                                                  & elasticity .~ 1
-                                            ]
+    b <- dynamicBody sp [ def & shape      .~ Poly (square sideLen)
+                              & mass       .~ 5
+                              & friction   .~ 0.2
+                              & elasticity .~ 1
+                        ]
+                        [ pos               := outOfStageP
+                        , evt pos           := setBodyPosE
+                        , evt rot           := xDir <$ setBodyPosE
+                        , evt vel           := 0 <$ setBodyPosE
+                        , evt angularVel    := 0 <$ droppingE
+                        , active            := False -- sleep the bodies on start
+                        , evt active        := leftmost [ True <$ droppingE
+                                                        , False <$ outOfStageE ]
+                        , collisionType     := Box Dead
+                        , evt collisionType := ctE
+                        ]
     forG_ setBodyPosE $ liftIO . putStrLn . ("Setting position "++) . show
     boxFrameD <- joinDyn <$> holdDyn (constDyn boxImage) (brokenAnim <$ brokenE)
-    s <- sprite $ def & trans .~ (b ^. trans)
-                      & spriteName .~ boxFrameD
-    return $ B outOfStageE b s
+    sprite_ [ dyn pos        := b^.bodyPos
+            , dyn rot        := b^.bodyRot
+            , dyn spriteName := boxFrameD
+            ]
+    return outOfStageE
 
 
 spawnEnemies :: (NodeGraph t m, PrimMonad m)
@@ -135,25 +134,27 @@ spawnEnemies winSize@(V2 width height) sp ticks enemySize aliveAnim = do
           Alive -> (foldDyn (+) 0 ticks >>=) . mapDyn $ \t ->
               let dist = (realToFrac t) * enemySpeed + startPos^._x
                   rem = dist `mod'` (2*width)
-              in if rem > width then ((2*width-rem) ^& enemyY, True ^& False {- flipped -})
-                                else (rem ^& enemyY, pure False)
-          Dead -> return $ constDyn (outOfStageP, pure False)
+              in if rem > width then ((2*width-rem) ^& enemyY, True {- flipped -})
+                                else (rem ^& enemyY, False)
+          Dead -> return $ constDyn (outOfStageP, False)
         posDyn <- mapDyn fst posFlipDyn
-        b <- staticBody sp $ def & bodyPos .~ outOfStageP
-                                 & setBodyPos .~ (updated posDyn)
-                                 & collisionType .~ Enemy Dead
-                                 & setCollisionType .~ (Enemy <$> updated aliveD)
-                                 & fixtures .~ [ def & shape .~ Poly (uncurry rect $ unr2 enemySize)
-                                                     & mass .~ 30
-                                                     & elasticity .~ 0.2
-                                               ]
+        b <- staticBody sp [ def & shape      .~ Poly (uncurry rect $ unr2 enemySize)
+                                 & mass       .~ 30
+                                 & elasticity .~ 0.2
+                           ]
+                           [ dyn' pos          := posDyn
+                           , collisionType     := Enemy Dead
+                           , evt collisionType := Enemy <$> updated aliveD
+                           ]
         animD <- fmap joinDyn . forDyn aliveD $ \case
           Alive -> aliveAnim
           Dead -> constDyn ""
         flippedD <- mapDyn snd posFlipDyn
-        sprite_ $ def & trans .~ (b^.trans)
-                      & flipped .~ flippedD
-                      & spriteName .~ animD
+        sprite_ [ dyn pos        := b^.bodyPos
+                , dyn rot        := b^.bodyRot
+                , dyn flippedX   := flippedD
+                , dyn spriteName := animD
+                ]
         return dieE
       return ()
 
@@ -173,28 +174,31 @@ boxThrower gen winSize@(V2 sw sh) drags ts = do
       let nBoxes = 5
           sideLen = 150
           outOfStageP = 0 .+^ winSize*2
-      sp <- space ts $ def & iterations .~ 5
-                           & gravity .~ constDyn (0 ^& (-100))
+      sp <- space ts [ iterations := 5
+                     , gravity := 0^&(-100)
+                     ]
       -- create the walls
-      staticBody sp $ def & bodyPos .~ midP
-                          & collisionType .~ Ground
-                          & fixtures .~ [ def & shape .~ Segment 0 a b
-                                              & elasticity .~ 0.6
-                                        | let rectPts = rect sw sh
-                                        , (a, b) <- zip rectPts (tail $ cycle rectPts)
-                                        ]
+      staticBody sp [ def & shape .~ Segment 0 a b
+                          & elasticity .~ 0.6
+                    | let rectPts = rect sw sh
+                    , (a, b) <- zip rectPts (tail $ cycle rectPts)
+                    ]
+                    [ pos := midP
+                    , collisionType := Ground
+                    ]
       -- create simple squares
-      rec (stD, dsEs, _) <- distribute drags nBoxes (boxToRecycle <$> boxes)
-          boxes <- forM dsEs $ \dsE -> box dsE sp sideLen outOfStageP boxImage (constDyn boxImage)
+      rec (stD, dsEs, _) <- distribute drags nBoxes recycles
+          recycles <- forM dsEs $ \dsE -> box dsE sp sideLen outOfStageP boxImage (constDyn boxImage)
       -- spawn the enemies
       enemyAnimD <- holdDyn (head enemyFns)
                     =<< zipListWithEvent const (cycle enemyFns)
                     =<< dilate (1/10) ts
       runRandT ?? gen $ spawnEnemies winSize sp ts (150 ^& 260) enemyAnimD
       nBoxesLeftTxtD <- (nubDyn <$> mapDyn length stD) >>= mapDyn (\n -> show n ++ " BOXES left")
-      label_ $ def & pos .~ constDyn (0 .+^ winSize & _x *~ 0.9 & _y *~ 0.05)
-                   & fontSize .~ constDyn 20
-                   & text .~ nBoxesLeftTxtD
+      label_ [ pos := 0 .+^ winSize & _x *~ 0.9 & _y *~ 0.05
+             , fontSize := 20
+             , dyn text := nBoxesLeftTxtD
+             ]
 
 
 main = do
@@ -214,12 +218,13 @@ main = do
       ts <- ticks
       -- fps10 <- dilate (1/10) ts
       drags <- dragged (evts^.singleTouchEvents)
-      void $ layerColor (def & color .~ constDyn blueviolet) -<< do
+      void $ layerColor [ color := blueviolet ] -<< do
         [lTouched, rTouched] <- forM [ (300, yellow)
                                      , (500, brown) ] $ \(x, c) -> lift $ do
-            l <- layerColor $ def & pos .~ constDyn (x ^& (winSize^._y/2))
-                                  & size .~ constDyn (pure 100)
-                                  & color .~ constDyn c
+            l <- layerColor [ pos := x ^& (winSize^._y/2)
+                            , size := pure 100
+                            , color := c
+                            ]
             filterG ?? (evts^.touchBegan) $ nodeContains l . (^.loc)
         wrap $ leftmost [ P.platformer winSize dks ts <$ lTouched
                         , boxThrower gen winSize drags ts <$ rTouched
