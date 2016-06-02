@@ -92,9 +92,8 @@ box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
                         ]
     forG_ setBodyPosE $ liftIO . putStrLn . ("Setting position "++) . show
     boxFrameD <- joinDyn <$> holdDyn (constDyn boxImage) (brokenAnim <$ brokenE)
-    sprite_ [ dyn pos        := b^.bodyPos
-            , dyn rot        := b^.bodyRot
-            , dyn spriteName := boxFrameD
+    sprite_ [ dyn (divided pos rot) := b^.transDyn
+            , dyn spriteName        := boxFrameD
             ]
     return outOfStageE
 
@@ -106,7 +105,7 @@ spawnEnemies :: (NodeGraph t m, PrimMonad m)
              -> V2 Double -- ^ enemy rectangular size
              -> Dynamic t String -- ^ enemy animation (alive)
              -> RandT m ()
-spawnEnemies winSize@(V2 width height) sp ticks enemySize aliveAnim = do
+spawnEnemies winSize@(V2 width _) sp ticks enemySize aliveAnim = do
     -- get the running total of the time
     randTsD <- lift $ foldDyn (+) 0 =<< dilate 2 ticks
     -- as time goes on, we increase the probability of starting new enemies
@@ -150,10 +149,9 @@ spawnEnemies winSize@(V2 width height) sp ticks enemySize aliveAnim = do
           Alive -> aliveAnim
           Dead -> constDyn ""
         flippedD <- mapDyn snd posFlipDyn
-        sprite_ [ dyn pos        := b^.bodyPos
-                , dyn rot        := b^.bodyRot
-                , dyn flippedX   := flippedD
-                , dyn spriteName := animD
+        sprite_ [ dyn (divided pos rot) := b^.transDyn
+                , dyn flippedX          := flippedD
+                , dyn spriteName        := animD
                 ]
         return dieE
       return ()
@@ -175,7 +173,7 @@ boxThrower gen winSize@(V2 sw sh) drags ts = do
           sideLen = 150
           outOfStageP = 0 .+^ winSize*2
       sp <- space ts [ iterations := 5
-                     , gravity := 0^&(-100)
+                     , gravity    := 0^&(-100)
                      ]
       -- create the walls
       staticBody sp [ def & shape .~ Segment 0 a b
@@ -183,7 +181,7 @@ boxThrower gen winSize@(V2 sw sh) drags ts = do
                     | let rectPts = rect sw sh
                     , (a, b) <- zip rectPts (tail $ cycle rectPts)
                     ]
-                    [ pos := midP
+                    [ pos           := midP
                     , collisionType := Ground
                     ]
       -- create simple squares
@@ -195,7 +193,7 @@ boxThrower gen winSize@(V2 sw sh) drags ts = do
                     =<< dilate (1/10) ts
       runRandT ?? gen $ spawnEnemies winSize sp ts (150 ^& 260) enemyAnimD
       nBoxesLeftTxtD <- (nubDyn <$> mapDyn length stD) >>= mapDyn (\n -> show n ++ " BOXES left")
-      label_ [ pos := 0 .+^ winSize & _x *~ 0.9 & _y *~ 0.05
+      label_ [ pos      := 0 .+^ winSize & _x *~ 0.9 & _y *~ 0.05
              , fontSize := 20
              , dyn text := nBoxesLeftTxtD
              ]
@@ -217,12 +215,12 @@ main = do
       dks <- dynKeysDown (evts^.keyPressed) (evts^.keyReleased)
       ts <- ticks
       -- fps10 <- dilate (1/10) ts
-      drags <- dragged (evts^.singleTouchEvents)
+      drags <- dragged (evts^.singleTouches)
       void $ layerColor [ color := blueviolet ] -<< do
         [lTouched, rTouched] <- forM [ (300, yellow)
                                      , (500, brown) ] $ \(x, c) -> lift $ do
-            l <- layerColor [ pos := x ^& (winSize^._y/2)
-                            , size := pure 100
+            l <- layerColor [ pos   := x ^& (winSize^._y/2)
+                            , size  := pure 100
                             , color := c
                             ]
             filterG ?? (evts^.touchBegan) $ nodeContains l . (^.loc)
