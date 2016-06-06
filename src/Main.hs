@@ -90,7 +90,6 @@ box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
                         , collisionType     := Box Dead
                         , evt collisionType := ctE
                         ]
-    forG_ setBodyPosE $ liftIO . putStrLn . ("Setting position "++) . show
     boxFrameD <- joinDyn <$> holdDyn (constDyn boxImage) (brokenAnim <$ brokenE)
     sprite_ [ dyn (divided pos rot) := b^.transDyn
             , dyn spriteName        := boxFrameD
@@ -98,7 +97,7 @@ box drags sp sideLen outOfStageP boxImage brokenAnim = mdo
     return outOfStageE
 
 
-spawnEnemies :: (NodeGraph t m, PrimMonad m)
+spawnEnemies :: (NodeGraph t m)
              => V2 Double
              -> DynSpace t
              -> Event t NominalDiffTime
@@ -110,7 +109,7 @@ spawnEnemies winSize@(V2 width _) sp ticks enemySize aliveAnim = do
     randTsD <- lift $ foldDyn (+) 0 =<< dilate 2 ticks
     -- as time goes on, we increase the probability of starting new enemies
     spawnE <- (fmapMaybe id <$>) . picks $ ffor (updated randTsD) $ \t ->
-                  let spawnProb = cos (realToFrac t)
+                  let spawnProb = max (cos (realToFrac t)) 0
                   in weighted [ (Just (), spawnProb)
                               , (Nothing, 1-spawnProb)
                               ]
@@ -162,6 +161,7 @@ boxThrower :: (NodeGraph t m, PrimMonad m)
            -> Event t (DragEvent t)
            -> Event t NominalDiffTime -> FreeT (Event t) m ()
 boxThrower gen winSize@(V2 sw sh) drags ts = do
+    lift $ askPostBuildEvent >>= runEvent_ . (liftIO (putStrLn "second scene built") <$)
     let midP = (0 .+^ winSize/2)
         boxImage = "res/box.png"
         enemyFns = [ "res/walk/000"++show i++".png" | i <- [1..8]::[Int] ]
@@ -211,19 +211,21 @@ main = do
     winSize <- getWinSize
     gen <- createSystemRandom
     mainScene $ do
+      askPostBuildEvent >>= runEvent_ . (liftIO (putStrLn "OH YEAH - main stuff finished building") <$)
       evts <- uiEvents
       dks <- dynKeysDown (evts^.keyPressed) (evts^.keyReleased)
       ts <- ticks
       -- fps10 <- dilate (1/10) ts
       drags <- dragged (evts^.singleTouches)
       void $ layerColor [ color := blueviolet ] -<< do
+        lift $ askPostBuildEvent >>= runEvent_ . (liftIO (putStrLn "first scene built") <$)
         [lTouched, rTouched] <- forM [ (300, yellow)
                                      , (500, brown) ] $ \(x, c) -> lift $ do
             l <- layerColor [ pos   := x ^& (winSize^._y/2)
                             , size  := pure 100
                             , color := c
                             ]
-            filterG ?? (evts^.touchBegan) $ nodeContains l . (^.loc)
+            filterMEvent ?? (evts^.touchBegan) $ nodeContains l . (^.loc)
         wrap $ leftmost [ P.platformer winSize dks ts <$ lTouched
                         , boxThrower gen winSize drags ts <$ rTouched
                         ]
