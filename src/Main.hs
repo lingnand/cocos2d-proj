@@ -159,7 +159,7 @@ boxThrower :: (NodeGraph t m, PrimMonad m)
            => Gen (PrimState m)
            -> V2 Double
            -> Event t (DragEvent t)
-           -> Event t NominalDiffTime -> FreeT (Event t) m ()
+           -> Event t NominalDiffTime -> FreeT (Event t) m String
 boxThrower gen winSize@(V2 sw sh) drags ts = do
     lift $ askPostBuildEvent >>= runEvent_ . (liftIO (putStrLn "second scene built") <$)
     let midP = (0 .+^ winSize/2)
@@ -197,6 +197,7 @@ boxThrower gen winSize@(V2 sw sh) drags ts = do
              , fontSize := 20
              , dyn text := nBoxesLeftTxtD
              ]
+      return "box thrower build finished"
 
 
 main = do
@@ -217,7 +218,7 @@ main = do
       ts <- ticks
       -- fps10 <- dilate (1/10) ts
       drags <- dragged (evts^.singleTouches)
-      void $ layerColor [ color := blueviolet ] -<< do
+      (_, evt) <- layerColor [ color := blueviolet ] -<< do
         lift $ askPostBuildEvent >>= runEvent_ . (liftIO (putStrLn "first scene built") <$)
         [lTouched, rTouched] <- forM [ (300, yellow)
                                      , (500, brown) ] $ \(x, c) -> lift $ do
@@ -229,3 +230,4 @@ main = do
         wrap $ leftmost [ P.platformer winSize dks ts <$ lTouched
                         , boxThrower gen winSize drags ts <$ rTouched
                         ]
+      onEvent evt $ liftIO . putStrLn

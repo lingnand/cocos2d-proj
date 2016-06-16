@@ -44,7 +44,7 @@ update (keys, dt) p = p & velocity .~ v
           dir = arrow keys * speed
           dt' = realToFrac dt
 
-platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> FreeT (Event t) m ()
+platformer :: NodeGraph t m => V2 Double -> Dynamic t (S.Set Key) -> Event t NominalDiffTime -> FreeT (Event t) m String
 platformer winSize dks ts = lift $ do
       dplayer <- foldDyn update (Player 0 (0 .+^ winSize/2)) $ attachDyn dks ts
       dpos <- mapDyn (^.position) dplayer
@@ -53,3 +53,4 @@ platformer winSize dks ts = lift $ do
                   , color := orange
                   , dyn pos := dpos
                   ]
+      return "platformer finished"
