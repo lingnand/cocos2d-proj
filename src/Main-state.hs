@@ -33,7 +33,7 @@ loadingScene config resources = do
     -- loading scene
     percent <- foldDyn (const . uncurry ((/) `on` fromIntegral)) (0::Double) progress
     notice <- forDyn percent $ \p -> "Loading " ++ showFFloat (Just 2) (p*100) "%..."
-    label_ [ pos       := config^.loadText.textPos
+    label_ [ position  := config^.loadText.textPos
            , fontSize  := config^.loadText.textFontSize
            , dyn' text := notice
            ]
@@ -49,23 +49,24 @@ mkBox sp conf = do
                       comb p _ = p
                   in nubDyn <$> combineDyn comb setPosDyn statusDyn
     usePhysicsDyn <- mapDyn (`elem` [BoxFreeForm, BoxBroken]) statusDyn
-    b <- dynamicBody sp [ def & shape      .~ Poly (square $ conf^.boxSideLen)
-                              & mass       .~ conf^.boxMass
-                              & friction   .~ conf^.boxFriction
-                              & elasticity .~ conf^.boxElasticity
-                        ]
-                        [ dyn pos                       := setPosDyn'
-                        , dyn (xDir >$ rot)             := setPosDyn'
-                        , dyn (0 >$ vel)                := setPosDyn'
-                        , dyn (0 >$ angularVel)         := setPosDyn'
+    b <- dynamicBody sp [ fixtures                      := [
+                            def & shape      .~ Poly (square $ conf^.boxSideLen)
+                                & mass       .~ conf^.boxMass
+                                & friction   .~ conf^.boxFriction
+                                & elasticity .~ conf^.boxElasticity
+                          ]
+                        , dyn position                  := setPosDyn'
+                        , dyn (xDir >$ rotation)             := setPosDyn'
+                        , dyn (0 >$ velocity)           := setPosDyn'
+                        , dyn (0 >$ angularVelocity)    := setPosDyn'
                         , dyn (CTBox >$< collisionType) := statusDyn
                         , dyn active                    := usePhysicsDyn
                         ]
     frameDyn <- (fmap joinDyn) . forDyn statusDyn $ \case
                     BoxBroken -> conf^.boxBrokenAnimDyn
                     _ -> constDyn (conf^.boxImage)
-    sprite_ [ dyn (divided pos rot) := b^.transDyn
-            , dyn spriteName        := frameDyn
+    sprite_ [ dyn transform  := b^.transDyn
+            , dyn spriteName := frameDyn
             ]
     -- state modifiers
     let brokenE = fforMaybe (b^.collisionBegan) $ \a ->
@@ -172,12 +173,13 @@ boxThrower gen conf = void $ node [] <-< do
                   , gravity    := conf^.spGravity
                   ]
       -- create the walls
-      staticBody sp [ def & shape .~ Segment 0 a b
-                          & elasticity .~ conf^.wallElasticity
-                    | let rectPts = uncurry rect $ unr2 (conf^.winSize)
-                    , (a, b) <- zip rectPts (tail $ cycle rectPts)
-                    ]
-                    [ pos           := midP
+      staticBody sp [ fixtures      := [
+                        def & shape .~ Segment 0 a b
+                              & elasticity .~ conf^.wallElasticity
+                        | let rectPts = uncurry rect $ unr2 (conf^.winSize)
+                        , (a, b) <- zip rectPts (tail $ cycle rectPts)
+                      ]
+                    , position      := midP
                     , collisionType := CTGround
                     ]
       -- create the boxes
@@ -195,7 +197,7 @@ boxThrower gen conf = void $ node [] <-< do
             modifyDyn $ (idleBoxes %~ IS.insert k) <$ removedE
 
       nBoxesLeftTxtD <- asksDyn $ \s -> show (IS.size $ s^.idleBoxes) ++ " BOXES left"
-      label_ [ pos      := conf^.boxesLeftText.textPos
+      label_ [ position := conf^.boxesLeftText.textPos
              , fontSize := conf^.boxesLeftText.textFontSize
              , dyn text := nBoxesLeftTxtD
              ]
@@ -213,9 +215,9 @@ boxThrower gen conf = void $ node [] <-< do
 startScene :: NodeGraph t m => StartSceneConfig t -> [(MenuButtonConfig t, a)] -> m (Event t a)
 startScene conf buttons = do
     es <- forM buttons $ \(bConf, a) -> do
-            l <- layerColor [ pos   := bConf^.menuButtonPos
-                            , size  := pure (bConf^.menuButtonSideLen)
-                            , color := bConf^.menuButtonColor
+            l <- layerColor [ position := bConf^.menuButtonPos
+                            , size     := pure (bConf^.menuButtonSideLen)
+                            , color    := bConf^.menuButtonColor
                             ]
             onEventMaybe (conf^.touchBegan) $ \t -> runMaybeT $ do
                 contains <- nodeContains l (t^.loc)
